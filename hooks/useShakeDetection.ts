@@ -3,7 +3,7 @@ import { DeviceMotion } from 'expo-sensors';
 import { Platform } from 'react-native';
 
 // 💥 UPDATED THRESHOLD: Only trigger a detection when acceleration exceeds 15 G's.
-const SHAKE_THRESHOLD = 40.0; 
+const SHAKE_THRESHOLD = 30.0; 
 const SHAKE_TIMEOUT = 1000; // Debounce time in ms
 
 let lastShakeTime = 0;
