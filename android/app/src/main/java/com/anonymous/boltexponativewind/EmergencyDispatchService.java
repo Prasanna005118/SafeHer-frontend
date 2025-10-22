@@ -3,14 +3,13 @@ package com.anonymous.boltexponativewind;
 import android.Manifest;
 import android.app.Service;
 import android.app.Notification;
-import android.app.NotificationManager;
 import android.app.NotificationChannel;
-import android.app.PendingIntent;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.PackageManager;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
@@ -24,7 +23,6 @@ import androidx.core.content.ContextCompat;
 import android.content.pm.ServiceInfo;
 
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -35,23 +33,21 @@ public class EmergencyDispatchService extends Service {
     private static final String CHANNEL_ID = "safeher_emergency_dispatch";
     private static final String PREFS_NAME = "SafeHerPrefs";
     private static final String CONTACTS_KEY = "emergency_contacts";
-
     private SmsStatusReceiver smsStatusReceiver;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        // ✅ Register receiver dynamically (required on modern Android)
         smsStatusReceiver = new SmsStatusReceiver();
         IntentFilter filter = new IntentFilter();
         filter.addAction("SMS_SENT");
         filter.addAction("SMS_DELIVERED");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-    registerReceiver(smsStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-} else {
-    registerReceiver(smsStatusReceiver, filter);
-}
+            registerReceiver(smsStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(smsStatusReceiver, filter);
+        }
         Log.d(TAG, "✅ SmsStatusReceiver registered at runtime.");
     }
 
@@ -63,6 +59,7 @@ public class EmergencyDispatchService extends Service {
         } else {
             startForeground(2001, notification);
         }
+
         new Thread(this::sendEmergencyAlertsToAll).start();
         return START_NOT_STICKY;
     }
@@ -77,7 +74,6 @@ public class EmergencyDispatchService extends Service {
                 return;
             }
 
-            // ✅ Check SMS permission before sending
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
                     != PackageManager.PERMISSION_GRANTED) {
                 Log.e(TAG, "❌ SEND_SMS permission missing!");
@@ -95,59 +91,38 @@ public class EmergencyDispatchService extends Service {
                 String trimmed = number.trim();
                 if (trimmed.isEmpty()) continue;
 
-                // ✅ Add +91 prefix if missing
                 if (!trimmed.startsWith("+")) {
                     trimmed = "+91" + trimmed;
                     Log.d(TAG, "📞 Added country code: " + trimmed);
                 }
 
                 try {
-                    ArrayList<String> parts = smsManager.divideMessage(message);
                     long uniqueSeed = System.currentTimeMillis() + sentCount * 10;
+                    Intent sentIntent = new Intent("SMS_SENT");
+                    sentIntent.putExtra("recipient", trimmed);
+                    Intent deliveredIntent = new Intent("SMS_DELIVERED");
+                    deliveredIntent.putExtra("recipient", trimmed);
 
-                    ArrayList<PendingIntent> sentPIs = new ArrayList<>();
-                    ArrayList<PendingIntent> deliveredPIs = new ArrayList<>();
-
-                    for (int i = 0; i < parts.size(); i++) {
-                        int reqCodeSent = (int) (uniqueSeed + i);
-                        int reqCodeDel = (int) (uniqueSeed + i + 1000);
-
-                        Intent sentIntent = new Intent("SMS_SENT");
-                        sentIntent.putExtra("recipient", trimmed);
-                        PendingIntent sentPI = PendingIntent.getBroadcast(
-                                this, reqCodeSent, sentIntent,
-                                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
-                        Intent deliveredIntent = new Intent("SMS_DELIVERED");
-                        deliveredIntent.putExtra("recipient", trimmed);
-                        PendingIntent deliveredPI = PendingIntent.getBroadcast(
-                                this, reqCodeDel, deliveredIntent,
-                                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
-                        sentPIs.add(sentPI);
-                        deliveredPIs.add(deliveredPI);
-                    }
-
-                    if (parts.size() > 1) {
-                        smsManager.sendMultipartTextMessage(trimmed, null, parts, sentPIs, deliveredPIs);
-                        Log.d(TAG, "📝 Sent multipart SMS (" + parts.size() + " parts) to " + trimmed);
-                    } else {
-                        smsManager.sendTextMessage(trimmed, null, message, sentPIs.get(0), deliveredPIs.get(0));
-                        Log.d(TAG, "📤 Sent single-part SMS to " + trimmed);
-                    }
-
+                    smsManager.sendMultipartTextMessage(trimmed, null,
+                            smsManager.divideMessage(message),
+                            null, null);
+                    Log.d(TAG, "📝 Sent multipart SMS (" +
+                            smsManager.divideMessage(message).size() + " parts) to " + trimmed);
                     sentCount++;
+
                 } catch (Exception e) {
                     Log.e(TAG, "❌ Failed to send SMS to " + trimmed, e);
                 }
             }
 
             Log.d(TAG, "📊 Total SMS attempts: " + sentCount);
-            updateNotification("✅ Alert attempted to " + sentCount + " contacts!");
+            updateNotification("✅ Alert sent to " + sentCount + " contacts!");
         } catch (Exception e) {
             Log.e(TAG, "Fatal failure during background dispatch", e);
         } finally {
             try { Thread.sleep(4000); } catch (InterruptedException ignored) {}
+            Log.d(TAG, "🎯 Starting periodic location monitoring service...");
+            startService(new Intent(this, EmergencyLocationUpdateService.class));
             stopSelf();
         }
     }
@@ -168,6 +143,7 @@ public class EmergencyDispatchService extends Service {
                 if (lastKnown != null) {
                     latitude = lastKnown.getLatitude();
                     longitude = lastKnown.getLongitude();
+
                     try {
                         Geocoder geocoder = new Geocoder(this, Locale.getDefault());
                         List<Address> addresses = geocoder.getFromLocation(latitude, longitude, 1);
@@ -185,14 +161,10 @@ public class EmergencyDispatchService extends Service {
             Log.e(TAG, "Error getting location/address", e);
         }
 
-        return "🚨 EMERGENCY ALERT from SafeHer\n\n" +
-                "I NEED HELP IMMEDIATELY!\n\n" +
-                "Time: " + timestamp + "\n" +
-                "Location: " + addressText + "\n\n" +
-                "Google Maps: https://www.google.com/maps/search/?api=1&query=" +
-                latitude + "," + longitude + "\n\n" +
-                "Please check on me or call emergency services!\n\n" +
-                "- Sent automatically by SafeHer";
+        return "🚨 EMERGENCY ALERT from SafeHer\n" +
+                "I need help! Time: " + timestamp + "\n" +
+                "Loc: " + addressText + "\n" +
+                "Map: https://maps.google.com/?q=" + latitude + "," + longitude;
     }
 
     private Notification buildForegroundNotification(String text) {
